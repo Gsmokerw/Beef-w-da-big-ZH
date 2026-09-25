@@ -1,3 +1,7 @@
+
+<img width="1920" height="1080" alt="chkf(1)" src="https://github.com/user-attachments/assets/864bfa35-0f32-42f6-b4ba-be0d3d998747" />
+
+
 # Shadow Dimension
 
 A monochromatic atmospheric precision platformer in C++17 & Raylib inspired by the aesthetic of *Limbo* and *Inside*.
