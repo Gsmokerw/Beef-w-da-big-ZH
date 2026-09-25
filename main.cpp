@@ -925,6 +925,84 @@ static const char* FILM_GRAIN_FS =
     "    finalColor = vec4(clamp(col, 0.0, 1.0), tex.a);\n"
     "}\n";
 
+static const char* FILM_GRAIN_FS_120 =
+    "#version 120\n"
+    "varying vec2 fragTexCoord;\n"
+    "varying vec4 fragColor;\n"
+    "uniform sampler2D texture0;\n"
+    "uniform float uTime;\n"
+    "uniform float uVignette;\n"
+    "uniform float uGrain;\n"
+    "\n"
+    "float rand(vec2 co) {\n"
+    "    return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);\n"
+    "}\n"
+    "\n"
+    "void main() {\n"
+    "    vec4 tex = texture2D(texture0, fragTexCoord);\n"
+    "    vec2 uv = fragTexCoord * (vec2(1.0) - fragTexCoord.yx);\n"
+    "    float vig = uv.x * uv.y * 15.0;\n"
+    "    vig = clamp(pow(vig, uVignette), 0.0, 1.0);\n"
+    "    float noise = (rand(fragTexCoord * 140.0 + fract(uTime * 37.19)) - 0.5) * uGrain;\n"
+    "    vec3 col = tex.rgb * vig + vec3(noise);\n"
+    "    gl_FragColor = vec4(clamp(col, 0.0, 1.0), tex.a);\n"
+    "}\n";
+
+static void ToggleGameFullscreen(GameSettings& settings) {
+    ToggleFullscreen();
+    if (!IsWindowFullscreen()) {
+        SetWindowSize(SCREEN_WIDTH, SCREEN_HEIGHT);
+    }
+    settings.isFullscreen = IsWindowFullscreen();
+}
+
+static std::string FindUniversalAssetPath(const std::vector<std::string>& candidates, const std::string& origCwd, const std::string& appDir) {
+    std::vector<std::string> baseDirs;
+    if (!origCwd.empty()) {
+        baseDirs.push_back(origCwd);
+        baseDirs.push_back(origCwd + "/..");
+        baseDirs.push_back(origCwd + "/../..");
+    }
+    if (!appDir.empty()) {
+        baseDirs.push_back(appDir);
+        baseDirs.push_back(appDir + "/..");
+        baseDirs.push_back(appDir + "/../..");
+        baseDirs.push_back(appDir + "/Resources");
+        baseDirs.push_back(appDir + "/../Resources");
+    }
+    baseDirs.push_back(".");
+    baseDirs.push_back("..");
+    baseDirs.push_back("../..");
+
+    std::vector<std::string> subDirs = {
+        "assets/sys/.cache/",
+        "assets/sys/",
+        "assets/",
+        "sys/.cache/",
+        ".cache/",
+        "Resources/assets/sys/.cache/",
+        "Resources/assets/",
+        "Resources/",
+        ""
+    };
+
+    for (const auto& base : baseDirs) {
+        for (const auto& sub : subDirs) {
+            for (const auto& file : candidates) {
+                std::string fullPath;
+                if (base == ".") fullPath = sub + file;
+                else if (base.empty() || base.back() == '/' || base.back() == '\\') fullPath = base + sub + file;
+                else fullPath = base + "/" + sub + file;
+
+                if (FileExists(fullPath.c_str())) {
+                    return fullPath;
+                }
+            }
+        }
+    }
+    return "";
+}
+
 static void AddCrumbleTile(Level& lvl, int x, int y, int type) {
     if (x >= 0 && x < lvl.width && y >= 0 && y < lvl.height) {
         lvl.tiles[y * lvl.width + x] = type;
@@ -957,9 +1035,16 @@ static void AddBreakableBlock(Level& lvl, int x, int y) {
 // MAIN GAME LOOP
 // =========================================================================
 int main(void) {
+    const char* origCwdPtr = GetWorkingDirectory();
+    std::string origCwd = origCwdPtr ? origCwdPtr : "";
+    const char* appDirPtr = GetApplicationDirectory();
+    std::string appDir = appDirPtr ? appDirPtr : "";
+
     SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Shadow Dimension - Limbo & Inside Monochromatic Edition");
-    ChangeDirectory(GetApplicationDirectory());
+    if (!appDir.empty()) {
+        ChangeDirectory(appDir.c_str());
+    }
     SetExitKey(KEY_NULL); // Prevent ESC from closing window!
     SetTargetFPS(60);
 
@@ -971,56 +1056,51 @@ int main(void) {
     RenderTexture2D screenTarget = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
     SetTextureFilter(screenTarget.texture, TEXTURE_FILTER_BILINEAR);
 
-    const char* imgSearchList[] = {
-        "assets/sys/.cache/depth_buffer.png",
-        "assets/sys/.cache/picture.png",
-        "assets/picture.png",
-        "assets/picture.jpg",
-        "picture.png",
-        "picture.jpg",
-        "picture.jpeg"
+    std::vector<std::string> imgCandidates = {
+        "depth_buffer.png", "depth_buffer.PNG", "depth_buffer.jpg", "depth_buffer.JPG", "depth_buffer.jpeg",
+        "picture.png", "picture.PNG", "picture.jpg", "picture.JPG", "picture.jpeg", "picture.JPEG",
+        "Picture.png", "Picture.PNG", "Picture.jpg", "Picture.JPG",
+        "secret.png", "secret.PNG", "secret.jpg", "secret.JPG",
+        "secret_image.png", "secret_image.PNG", "secret_image.jpg"
     };
     Texture2D secretPicture = { 0 };
-    for (const char* path : imgSearchList) {
-        if (FileExists(path)) {
-            secretPicture = LoadTexture(path);
-            if (secretPicture.id > 0) {
-                SetTextureFilter(secretPicture, TEXTURE_FILTER_BILINEAR);
-                break;
-            }
+    std::string foundImgPath = FindUniversalAssetPath(imgCandidates, origCwd, appDir);
+    if (!foundImgPath.empty()) {
+        secretPicture = LoadTexture(foundImgPath.c_str());
+        if (secretPicture.id > 0) {
+            SetTextureFilter(secretPicture, TEXTURE_FILTER_BILINEAR);
         }
     }
 
-    const char* sndSearchList[] = {
-        "assets/sys/.cache/env_ambience.mp3",
-        "assets/sys/.cache/audio.mp3",
-        "assets/sys/.cache/Audio.MP3",
-        "assets/audio.mp3",
-        "assets/Audio.MP3",
-        "audio.mp3",
-        "Audio.MP3",
-        "audio.wav",
-        "audio.ogg"
+    std::vector<std::string> sndCandidates = {
+        "env_ambience.mp3", "env_ambience.MP3", "env_ambience.wav", "env_ambience.WAV", "env_ambience.ogg", "env_ambience.OGG",
+        "audio.mp3", "audio.MP3", "audio.wav", "audio.WAV", "audio.ogg", "audio.OGG",
+        "Audio.mp3", "Audio.MP3", "Audio.wav", "Audio.WAV", "Audio.ogg", "Audio.OGG",
+        "secret.mp3", "secret.MP3", "secret.wav", "secret.WAV", "secret.ogg", "secret.OGG",
+        "secret_audio.mp3", "secret_audio.MP3"
     };
     Sound secretSound = { 0 };
     bool secretSoundReady = false;
     Music secretMusic = { 0 };
     bool secretMusicReady = false;
-    for (const char* path : sndSearchList) {
-        if (FileExists(path)) {
-            secretSound = LoadSound(path);
-            secretSoundReady = IsSoundReady(secretSound);
-            secretMusic = LoadMusicStream(path);
+    std::string foundSndPath = FindUniversalAssetPath(sndCandidates, origCwd, appDir);
+    if (!foundSndPath.empty()) {
+        secretSound = LoadSound(foundSndPath.c_str());
+        secretSoundReady = IsSoundReady(secretSound);
+        if (!secretSoundReady) {
+            secretMusic = LoadMusicStream(foundSndPath.c_str());
             secretMusicReady = IsMusicReady(secretMusic);
             if (secretMusicReady) {
                 secretMusic.looping = false;
                 SetMusicVolume(secretMusic, settings.masterVolume);
             }
-            if (secretSoundReady || secretMusicReady) break;
         }
     }
 
     Shader postShader = LoadShaderFromMemory(nullptr, FILM_GRAIN_FS);
+    if (!IsShaderReady(postShader)) {
+        postShader = LoadShaderFromMemory(nullptr, FILM_GRAIN_FS_120);
+    }
     bool shaderActive = IsShaderReady(postShader);
     int uTimeLoc = -1, uVignetteLoc = -1, uGrainLoc = -1;
     if (shaderActive) {
@@ -1081,8 +1161,13 @@ int main(void) {
 
         float currentTime = (float)GetTime();
 
-        float winW = (float)GetScreenWidth();
-        float winH = (float)GetScreenHeight();
+        float winW = (float)GetRenderWidth();
+        float winH = (float)GetRenderHeight();
+        if (winW <= 0.0f) winW = (float)GetScreenWidth();
+        if (winH <= 0.0f) winH = (float)GetScreenHeight();
+        if (winW <= 0.0f) winW = (float)SCREEN_WIDTH;
+        if (winH <= 0.0f) winH = (float)SCREEN_HEIGHT;
+
         float viewScale = std::min(winW / (float)SCREEN_WIDTH, winH / (float)SCREEN_HEIGHT);
         if (viewScale <= 0.001f) viewScale = 1.0f;
         float renderW = (float)SCREEN_WIDTH * viewScale;
@@ -1094,6 +1179,13 @@ int main(void) {
             (rawMouse.x - destViewport.x) / viewScale,
             (rawMouse.y - destViewport.y) / viewScale
         };
+
+        if (IsKeyPressed(KEY_F11) || (IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_ENTER)) || (IsKeyDown(KEY_RIGHT_ALT) && IsKeyPressed(KEY_ENTER))) {
+            ToggleGameFullscreen(settings);
+        }
+        if (IsWindowFullscreen() != settings.isFullscreen) {
+            settings.isFullscreen = IsWindowFullscreen();
+        }
 
         if (secretMusicReady && IsMusicStreamPlaying(secretMusic)) {
             UpdateMusicStream(secretMusic);
@@ -1194,8 +1286,7 @@ int main(void) {
             bool backClick = (CheckCollisionPointRec(mouse, backBtn) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) || IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_B) || IsKeyPressed(KEY_BACKSPACE);
 
             if (fsClick) {
-                settings.isFullscreen = !settings.isFullscreen;
-                ToggleFullscreen();
+                ToggleGameFullscreen(settings);
             }
             if (vDownClick) {
                 settings.masterVolume = std::max(0.0f, settings.masterVolume - 0.1f);
@@ -2064,7 +2155,6 @@ int main(void) {
             Rectangle playBtn = { SCREEN_WIDTH / 2.0f - 160.0f, 320.0f, 320.0f, 42.0f };
             Rectangle skipBtn = { SCREEN_WIDTH / 2.0f - 160.0f, 375.0f, 320.0f, 42.0f };
             Rectangle setBtn  = { SCREEN_WIDTH / 2.0f - 160.0f, 430.0f, 320.0f, 42.0f };
-            Vector2 mouse = GetMousePosition();
             bool playHover = CheckCollisionPointRec(mouse, playBtn);
             bool skipHover = CheckCollisionPointRec(mouse, skipBtn);
             bool setHover  = CheckCollisionPointRec(mouse, setBtn);
@@ -2117,7 +2207,6 @@ int main(void) {
             Rectangle shakeBtn = { SCREEN_WIDTH / 2.0f - 160.0f, 405.0f, 320.0f, 40.0f };
             Rectangle backBtn = { SCREEN_WIDTH / 2.0f - 160.0f, 470.0f, 320.0f, 40.0f };
 
-            Vector2 mouse = GetMousePosition();
             bool fsHov = CheckCollisionPointRec(mouse, fsBtn);
             bool vdHov = CheckCollisionPointRec(mouse, volDownBtn);
             bool vuHov = CheckCollisionPointRec(mouse, volUpBtn);
@@ -2171,14 +2260,22 @@ int main(void) {
             ClearBackground(COLOR_OBSIDIAN);
 
             if (secretPicture.id > 0) {
-                float scale = std::min((float)SCREEN_WIDTH / secretPicture.width, (float)SCREEN_HEIGHT / secretPicture.height);
-                float dw = secretPicture.width * scale;
-                float dh = secretPicture.height * scale;
-                float dx = (SCREEN_WIDTH - dw) * 0.5f;
-                float dy = (SCREEN_HEIGHT - dh) * 0.5f;
+                float scale = std::min((float)SCREEN_WIDTH / (float)secretPicture.width, (float)SCREEN_HEIGHT / (float)secretPicture.height);
+                float dw = (float)secretPicture.width * scale;
+                float dh = (float)secretPicture.height * scale;
+                float dx = ((float)SCREEN_WIDTH - dw) * 0.5f;
+                float dy = ((float)SCREEN_HEIGHT - dh) * 0.5f;
 
                 DrawTexturePro(secretPicture, { 0, 0, (float)secretPicture.width, (float)secretPicture.height },
                                { dx, dy, dw, dh }, { 0, 0 }, 0.0f, WHITE);
+            } else {
+                float cx = (float)SCREEN_WIDTH * 0.5f;
+                float cy = (float)SCREEN_HEIGHT * 0.5f;
+                DrawCircleGradient((int)cx, (int)cy, 280.0f, ColorAlpha(COLOR_STARK_WHITE, 0.40f), BLANK);
+                DrawCircle((int)cx, (int)cy, 90.0f, COLOR_OBSIDIAN);
+                DrawCircleLines((int)cx, (int)cy, 92.0f, COLOR_STARK_WHITE);
+                DrawCircleLines((int)cx, (int)cy, 105.0f, COLOR_FOG_LIGHT);
+                DrawCircle((int)cx, (int)cy, 18.0f, COLOR_STARK_WHITE);
             }
 
             for (const auto& p : particles) {
